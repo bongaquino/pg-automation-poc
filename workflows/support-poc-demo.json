@@ -1,0 +1,70 @@
+{
+  "name": "Support Auto-Draft POC",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pg-support-ticket",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "name": "Incoming Ticket",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst ticket = {\n  conversation_id: body.conversation_id || 'T-' + Date.now(),\n  customer_email: body.customer_email || 'test@example.com',\n  customer_name: body.customer_name || 'Test Customer',\n  message: body.message || 'No message',\n  channel: body.channel || 'web',\n  created_at: new Date().toISOString()\n};\nreturn [{ json: ticket }];"
+      },
+      "name": "Parse Ticket",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ticket = $input.first().json;\nconst mockCustomers = {\n  'mike.jones@example.com': { found: true, orders_count: 2, total_spent: '$548.00', tags: 'club-buyer', last_order: 'SF1 Driver ($249)', note: 'Purchased SF1 Driver + Click Stick' },\n  'sarah.chen@example.com': { found: true, orders_count: 1, total_spent: '$249.00', tags: 'new-customer', last_order: '357 Fairway Wood ($249)', note: 'First purchase - gift order' },\n  'robert.williams@example.com': { found: true, orders_count: 1, total_spent: '$149.00', tags: 'click-stick-buyer', last_order: 'Click Stick ($149)', note: 'VIP Coaching auto-enrolled at checkout' },\n  'tom.baker@example.com': { found: true, orders_count: 3, total_spent: '$697.00', tags: 'repeat-buyer', last_order: 'ONE.1 Wedge ($149)', note: 'Owns training course' },\n  'jennifer.park@example.com': { found: true, orders_count: 4, total_spent: '$896.00', tags: 'loyal,improving', last_order: 'SQ Putter ($199)', note: 'Completed 2 courses' },\n  'dave.murphy@example.com': { found: true, orders_count: 1, total_spent: '$0.00', tags: 'app-user', last_order: 'App Free Trial', note: 'App trial user' }\n};\nconst customer = mockCustomers[ticket.customer_email] || { found: false, orders_count: 0, total_spent: '$0.00', tags: 'unknown', last_order: 'none', note: 'Not found' };\nreturn [{ json: { ...ticket, customer } }];"
+      },
+      "name": "Shopify Lookup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst msg = data.message.toLowerCase();\nlet category = 'product_question';\nlet urgency = 'low';\nlet product = null;\nlet orderId = null;\nlet summary = 'General inquiry';\n\nconst products = ['sf2 driver','sf1 driver','sf1','sf2','357','359','one.1','click stick','sq putter','square set','drawforce','hinge','launch deck','pg1'];\nfor (const p of products) { if (msg.includes(p)) { product = p; break; } }\nconst orderMatch = data.message.match(/(?:order|#|T-)\\s*([A-Z0-9-]+)/i);\nif (orderMatch) orderId = orderMatch[1];\n\nif (msg.includes('refund') || msg.includes('return') || msg.includes('money back')) {\n  category = 'refund'; urgency = 'medium'; summary = 'Customer requesting refund/return';\n} else if (msg.includes('broken') || msg.includes('damaged') || msg.includes('crushed')) {\n  category = 'shipping'; urgency = 'high'; summary = 'Product damaged in shipping';\n} else if (msg.includes('charge') || msg.includes('subscription') || msg.includes('unauthorized') || msg.includes('credit card')) {\n  category = 'billing_dispute'; urgency = 'high'; summary = 'Billing dispute - possible unauthorized charge';\n} else if (msg.includes('vip') || msg.includes('golf school')) {\n  category = 'vip_coaching'; urgency = 'low'; product = 'VIP Golf School'; summary = 'VIP Golf School inquiry';\n} else if (msg.includes('app') || msg.includes('crash') || msg.includes('white screen')) {\n  category = 'technical_support'; urgency = 'medium'; product = 'Mobile App'; summary = 'App technical issue';\n}\n\nreturn [{ json: { ...data, classification: { category, urgency, product_mentioned: product, order_id: orderId, summary } } }];"
+      },
+      "name": "Classify Ticket",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst cat = data.classification.category;\nconst name = data.customer_name.split(' ')[0];\nconst product = data.classification.product_mentioned || 'your product';\nconst orderId = data.classification.order_id || 'your order';\n\nconst drafts = {\n  refund: `Hi ${name},\\n\\nThank you for reaching out! We're sorry the ${product} isn't working out for you.\\n\\nGreat news - we offer a 365-day return policy, so you're well within the window. Here's how to get started:\\n\\n1. Reply with your order number (${orderId}) and we'll send a prepaid return label\\n2. Ship the item back in its original packaging\\n3. Refund processes within 3-5 business days\\n\\nBefore you return it, would you be open to a quick chat with one of our coaches? Sometimes a small adjustment makes all the difference.\\n\\nEither way, we've got you covered!\\n\\nThe Support Team`,\n\n  shipping: `Hi ${name},\\n\\nWe're really sorry about this - receiving a damaged item is the last thing we want, especially when it's a gift. That's on us.\\n\\nHere's what we're doing:\\n\\n1. Shipping a brand new ${product} right away - no need to return the damaged one first\\n2. We'll email a prepaid return label for the damaged unit\\n3. Replacement arrives within 3-5 business days\\n\\nI've flagged your order (${orderId}) for priority processing. You'll get tracking info as soon as it ships.\\n\\nWe apologize for the inconvenience!\\n\\nThe Support Team`,\n\n  billing_dispute: `Hi ${name},\\n\\nThank you for bringing this to our attention - we understand your concern and want to resolve this right away.\\n\\nThe charge appears to be for our VIP Coaching program, which may have been added during your purchase. We sincerely apologize for any confusion.\\n\\nHere's what we're doing immediately:\\n\\n1. Processing a full refund - you'll see it within 3-5 business days\\n2. Canceling the subscription - no future charges\\n3. You keep access to any content already viewed\\n\\nYour original purchase is completely unaffected.\\n\\nThe Support Team`,\n\n  vip_coaching: `Hi ${name},\\n\\nWow - that handicap improvement is incredible progress! The courses have clearly been working for you.\\n\\nGreat news about our Golf Schools:\\n\\n- We run schools across the US and UK\\n- Each school is 2.5 days of intensive, hands-on coaching\\n- Sessions are built around YOUR game - we identify your root flaw and fix it\\n- All schools welcome everyone\\n\\nI'd love to connect you with our team to check availability and pricing. Would you prefer a call or email?\\n\\nThe Support Team`,\n\n  technical_support: `Hi ${name},\\n\\nSorry the app is giving you trouble. The white screen issue is something we've seen before. Try these steps:\\n\\n1. Force close the app (swipe up from app switcher) and reopen\\n2. Go to Settings > App > Clear Cache\\n3. If that doesn't work, delete and reinstall - your data is saved to your account\\n\\nIf none of those work, could you let us know your device model and whether it happens on Wi-Fi, cellular, or both?\\n\\nYour data is safe and waiting for you!\\n\\nThe Support Team`,\n\n  product_question: `Hi ${name},\\n\\nGreat question! Based on your handicap and the issues you're describing, here are my recommendations:\\n\\n- The 357 (7-wood) gives you height and forgiveness on approach shots\\n- Easier to hit from the fairway than a long iron or hybrid\\n- Designed specifically for mid-handicappers\\n\\nFor ball striking, check out our Strike Sequence course - our #1 course for improving contact. About 4 hours of video with practice drills.\\n\\nWant more details on either?\\n\\nThe Support Team`\n};\n\nconst draft = drafts[cat] || drafts.product_question;\n\nconst output = {\n  status: 'drafted',\n  conversation_id: data.conversation_id,\n  classification: data.classification,\n  customer_context: data.customer,\n  draft_response: draft,\n  internal_note: 'AI DRAFT - Review before sending --- Category: ' + cat + ' | Urgency: ' + data.classification.urgency + ' | Product: ' + (data.classification.product_mentioned || 'none') + ' | Customer: ' + data.customer_name + ' (' + data.customer_email + ') | Orders: ' + data.customer.orders_count + ' | Spent: ' + data.customer.total_spent,\n  timestamp: new Date().toISOString()\n};\n\nreturn [{ json: output }];"
+      },
+      "name": "Draft and Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Incoming Ticket": {
+      "main": [[{ "node": "Parse Ticket", "type": "main", "index": 0 }]]
+    },
+    "Parse Ticket": {
+      "main": [[{ "node": "Shopify Lookup", "type": "main", "index": 0 }]]
+    },
+    "Shopify Lookup": {
+      "main": [[{ "node": "Classify Ticket", "type": "main", "index": 0 }]]
+    },
+    "Classify Ticket": {
+      "main": [[{ "node": "Draft and Output", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
